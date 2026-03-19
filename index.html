@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Interactive PCA Learning Lab</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script>
+    window.MathJax = {
+      tex: {
+        inlineMath: [["$", "$"], ["\\(", "\\)"]]
+      }
+    };
+  </script>
+  <script defer src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+  <script defer src="script.js"></script>
+</head>
+<body>
+  <div class="page-shell">
+    <header class="hero card">
+      <div class="hero-copy">
+        <p class="eyebrow">BT3017 Interactive Learning Lab</p>
+        <h1>Understanding PCA Through Data, Directions, and Lost Information</h1>
+        <p class="hero-text">
+          Principal Component Analysis, or PCA, starts by looking at the shape of a cloud of points. It finds new
+          directions that follow the main trends in that cloud, starting with the direction of maximum variance. By
+          keeping only the most important of these directions, PCA gives each point a smaller set of new coordinates
+          while preserving most of the important structure. This page lets you see that process step by step using
+          interactive 2D and 3D examples.
+        </p>
+        <div class="hero-objectives">
+          <span>See the original data shape</span>
+          <span>Understand why we center data</span>
+          <span>Build intuition for covariance</span>
+          <span>Understand eigenvectors and eigenvalues</span>
+          <span>Choose how many components to keep</span>
+          <span>See what information is lost</span>
+        </div>
+      </div>
+      <div class="hero-side">
+        <div class="formula-card">
+          <p class="formula-label">PCA in one line</p>
+          <p class="formula">$\Sigma v = \lambda v$</p>
+          <p class="formula-note">
+            The covariance matrix $\Sigma$ summarizes how the centered variables vary together. Its eigenvectors become
+            the new PCA directions, and its eigenvalues tell us how much of the data cloud's variation each direction
+            captures.
+          </p>
+        </div>
+      </div>
+    </header>
+
+    <div class="lab-layout">
+      <aside class="control-rail">
+        <section class="card control-card" id="controlsSection">
+          <div class="section-header compact">
+            <div>
+              <p class="section-index">2. Data Generation and Controls</p>
+              <h2>Set Up the PCA Experiment</h2>
+            </div>
+            <p class="section-lead">
+              Choose the shape of the data cloud, whether it is 2D or 3D, and how many principal components to keep.
+              The plots and explanations below update automatically.
+            </p>
+          </div>
+
+          <div class="control-stack">
+            <label class="control-group">
+              <span>
+                Dimensionality mode
+                <span class="help-badge" data-tooltip="Switch between a 2D and 3D dataset. If you upload a CSV file, it can also contain 2 or 3 numeric columns.">?</span>
+              </span>
+              <select id="dimensionMode">
+                <option value="2">2D dataset</option>
+                <option value="3" selected>3D dataset</option>
+              </select>
+            </label>
+
+            <label class="control-group">
+              <span>Number of points</span>
+              <input id="pointCount" type="range" min="30" max="320" step="10" value="140">
+              <strong id="pointCountValue">140</strong>
+            </label>
+
+            <label class="control-group">
+              <span>
+                Degree of spread
+                <span class="help-badge" data-tooltip="Spread controls how stretched out the cloud is along its main trend. A larger value makes the cloud longer, so the direction of maximum variance is easier to see.">?</span>
+              </span>
+              <input id="spreadControl" type="range" min="1.5" max="6.5" step="0.1" value="4.2">
+              <strong id="spreadValue">4.2</strong>
+            </label>
+
+            <label class="control-group">
+              <span>
+                Correlation structure
+                <span class="help-badge" data-tooltip="Correlation controls how strongly the variables move together. Higher positive correlation often creates a clearer tilted cloud, which makes the main PCA direction easier to see.">?</span>
+              </span>
+              <input id="correlationControl" type="range" min="-0.85" max="0.95" step="0.05" value="0.75">
+              <strong id="correlationValue">0.75</strong>
+            </label>
+
+            <label class="control-group">
+              <span>
+                Noise level
+                <span class="help-badge" data-tooltip="Noise adds random variation to the dataset. More noise makes the data look messier and can make smaller components matter more.">?</span>
+              </span>
+              <input id="noiseControl" type="range" min="0.02" max="1.2" step="0.02" value="0.22">
+              <strong id="noiseValue">0.22</strong>
+            </label>
+
+            <div class="control-group">
+              <span>
+                Keeping top <span id="keepCountLabel">3</span> principal components
+                <span class="help-badge" data-tooltip="PCA keeps the top x components by selecting the eigenvectors with the largest eigenvalues. These directions preserve the biggest patterns and the most important spread in the data.">?</span>
+              </span>
+              <div class="retain-control">
+                <input id="keepSlider" type="range" min="1" max="3" step="1" value="3">
+                <input id="keepNumber" type="number" min="1" max="3" step="1" value="3">
+              </div>
+              <p class="control-note" id="keepSummary">
+                These are kept because they are the directions that capture the most important variation in the data.
+              </p>
+            </div>
+
+            <label class="control-group upload-group">
+              <span>Upload CSV with 2 or 3 numeric columns</span>
+              <input id="csvUpload" type="file" accept=".csv">
+              <small>Column headers are optional. Rows with valid numeric values will be imported.</small>
+            </label>
+          </div>
+
+          <div class="button-row">
+            <button type="button" class="action-button primary" id="regenerateBtn">Regenerate synthetic data</button>
+            <button type="button" class="action-button" id="walkthroughBtn">Play walkthrough</button>
+            <button type="button" class="action-button" id="downloadBtn">Download dataset</button>
+            <button type="button" class="action-button" id="resetBtn">Reset</button>
+          </div>
+
+          <div class="control-footer">
+            <div id="datasetSummary" class="summary-box"></div>
+            <div class="roadmap-box">
+              <p class="roadmap-title">PCA Roadmap</p>
+              <ol class="roadmap-list" id="roadmapList">
+                <li data-focus="original">Look at the overall shape and trend of the data cloud</li>
+                <li data-focus="centering">Center the cloud so it sits at the origin</li>
+                <li data-focus="covariance">See how the centered variables vary together</li>
+                <li data-focus="components">Find the principal directions of spread</li>
+                <li data-focus="variance">Select the top eigenvectors to keep</li>
+                <li data-focus="reconstruction">Reconstruct the data and inspect the information loss</li>
+              </ol>
+            </div>
+          </div>
+        </section>
+      </aside>
+
+      <main class="lesson-column">
+        <section class="lesson-card card" id="sectionOriginal">
+          <div class="section-header">
+            <div>
+              <p class="section-index">3. Original Data Visualization</p>
+              <h2>What Does the Original Data Look Like?</h2>
+            </div>
+            <p class="section-lead" id="originalLead"></p>
+          </div>
+          <div class="section-grid">
+            <div id="originalPlot" class="plot-area tall-plot" aria-label="Original data plot"></div>
+            <div class="insight-panel" id="originalInsight"></div>
+          </div>
+        </section>
+
+        <section class="lesson-card card" id="sectionCentering">
+          <div class="section-header">
+            <div>
+              <p class="section-index">4. Mean Centering</p>
+              <h2>Why Do We Center the Data?</h2>
+            </div>
+            <p class="section-lead">
+              Before finding the principal directions, we first center the data so the cloud is centered at the origin.
+              PCA should measure the true spread of the cloud, not just where it happens to sit on the graph.
+            </p>
+          </div>
+          <div class="concept-row">
+            <div class="math-card">
+              <p class="formula">$X_c = X - \mu$</p>
+              <p class="formula-note">
+                Subtract the mean vector $\mu$ from every data point. This shifts the whole cloud so that it is
+                centered at the origin.
+              </p>
+            </div>
+            <div class="summary-box" id="centeringSummary"></div>
+          </div>
+          <div id="centeringPlot" class="plot-area wide-plot" aria-label="Mean centering plot"></div>
+        </section>
+
+        <section class="lesson-card card" id="sectionCovariance">
+          <div class="section-header">
+            <div>
+              <p class="section-index">5. Covariance Matrix and Intuition</p>
+              <h2>
+                What Does the Covariance Matrix Mean?
+                <span class="help-badge" data-tooltip="Covariance tells us whether two centered variables tend to move together. A positive value means they usually increase together, while a negative value means one tends to go up when the other goes down.">?</span>
+              </h2>
+            </div>
+            <p class="section-lead">
+              The diagonal values show how much each variable spreads on its own. The off-diagonal values show whether
+              centered variables move together, move in opposite directions, or have only a weak linear relationship.
+            </p>
+          </div>
+          <div class="section-grid">
+            <div id="covariancePlot" class="plot-area medium-plot" aria-label="Covariance heatmap"></div>
+            <div class="info-column">
+              <div class="matrix-card">
+                <p class="matrix-label">Covariance matrix after centering</p>
+                <div id="covarianceMatrix" class="matrix-display"></div>
+              </div>
+              <div class="insight-panel" id="covarianceInsight"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="lesson-card card" id="sectionComponents">
+          <div class="section-header">
+            <div>
+              <p class="section-index">6. Principal Components in 2D or 3D</p>
+              <h2>
+                What Do Eigenvectors and Eigenvalues Represent?
+                <span class="help-badge" data-tooltip="An eigenvector can be thought of as a special direction of the data. In PCA, these directions become the principal components.">?</span>
+                <span class="help-badge" data-tooltip="An eigenvalue tells us how much variation is captured along its matching eigenvector. A larger eigenvalue means that direction explains more of the data’s spread.">?</span>
+              </h2>
+            </div>
+            <p class="section-lead">
+              Eigenvectors define the new PCA directions. Their matching eigenvalues tell us how much of the cloud's
+              spread is captured along each direction.
+            </p>
+          </div>
+          <div class="section-grid">
+            <div id="componentPlot" class="plot-area tall-plot" aria-label="Principal component plot"></div>
+            <div class="info-column">
+              <div class="insight-panel" id="componentInsight"></div>
+              <div id="componentCards" class="component-card-grid"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="lesson-card card" id="sectionVariance">
+          <div class="section-header">
+            <div>
+              <p class="section-index">7. Explained Variance and Top x Selection</p>
+              <h2>Why Do We Keep the Top x Components?</h2>
+            </div>
+            <p class="section-lead">
+              PCA keeps the top x components by selecting the eigenvectors with the largest eigenvalues. These
+              directions preserve the biggest patterns in the cloud, so each point can be described with fewer
+              coordinates while keeping most of the important variation.
+            </p>
+          </div>
+          <div class="topx-explanation" id="topXExplanation"></div>
+          <div class="chart-grid">
+            <div class="chart-card">
+              <p class="chart-label">
+                Scree plot
+                <span class="help-badge" data-tooltip="Explained variance is the percentage of the dataset’s total variation captured by one principal component.">?</span>
+              </p>
+              <div id="screePlot" class="plot-area medium-plot" aria-label="Explained variance scree plot"></div>
+            </div>
+            <div class="chart-card">
+              <p class="chart-label">
+                Cumulative explained variance
+                <span class="help-badge" data-tooltip="Cumulative explained variance adds up the variation captured by the first few components. It shows how much of the total information is kept when you retain the top x components.">?</span>
+              </p>
+              <div id="cumulativePlot" class="plot-area medium-plot" aria-label="Cumulative explained variance plot"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="lesson-card card" id="sectionReconstruction">
+          <div class="section-header">
+            <div>
+              <p class="section-index">8. Reconstruction and Information Loss</p>
+              <h2>
+                What Information Is Lost When Fewer Components Are Kept?
+                <span class="help-badge" data-tooltip="After each point is projected onto the kept components, reconstruction maps those new coordinates back to the original axes. Any difference from the original data is information that was not preserved.">?</span>
+              </h2>
+            </div>
+            <p class="section-lead">
+              After choosing the top components, each point is projected onto those directions and then mapped back to
+              the original axes. The gap between the original and reconstructed points shows the information that was
+              lost.
+            </p>
+          </div>
+          <div class="concept-row">
+            <div class="summary-box" id="reconstructionMetrics"></div>
+            <div class="summary-box" id="reconstructionExplanation"></div>
+          </div>
+          <div class="comparison-grid">
+            <div class="plot-panel">
+              <p class="chart-label">Original data cloud</p>
+              <div id="reconstructionOriginalPlot" class="plot-area wide-plot" aria-label="Original reconstruction comparison plot"></div>
+            </div>
+            <div class="plot-panel">
+              <p class="chart-label">Reconstructed from the selected top components</p>
+              <div id="reconstructionPlot" class="plot-area wide-plot" aria-label="Reconstruction plot"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="lesson-card card" id="sectionTakeaways">
+          <div class="section-header">
+            <div>
+              <p class="section-index">9. Key Takeaways and Common Misconceptions</p>
+              <h2>What Should You Remember About PCA?</h2>
+            </div>
+            <p class="section-lead">
+              These points summarize the main geometric ideas from the plots and clear up some common misunderstandings
+              about PCA.
+            </p>
+          </div>
+          <div class="takeaway-grid">
+            <article class="mini-card">
+              <h3>Key Takeaways</h3>
+              <ul class="insight-list">
+                <li>PCA creates new principal directions instead of simply choosing original variables.</li>
+                <li>PC1 follows the direction of maximum variance, and later components capture the remaining spread.</li>
+                <li>Keeping the top x components means selecting the eigenvectors with the largest eigenvalues so each point can be described with fewer coordinates.</li>
+                <li>When components are dropped, the reconstruction becomes less exact, and that gap shows the information loss.</li>
+              </ul>
+            </article>
+            <article class="mini-card">
+              <h3>Common Misconceptions</h3>
+              <ul class="insight-list">
+                <li>PCA is not the same as just deleting columns from the dataset.</li>
+                <li>Each principal component is a linear combination of the original variables.</li>
+                <li>A component with high variance is not automatically the most useful feature for every machine learning task.</li>
+                <li>If all components are kept, PCA changes to new coordinates but does not reduce size or lose information.</li>
+              </ul>
+            </article>
+            <article class="mini-card">
+              <h3>Project Notes</h3>
+              <div id="projectNotes" class="project-notes"></div>
+            </article>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+</body>
+</html>

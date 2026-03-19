@@ -72,3 +72,7 @@ git clone https://github.com/Sky-windy-1201/PCA-Visualisation
 cd <project-folder-name>
 
 # 3. Open index.html in your browser
+```
+
+### Option 1: Open directly in your browser
+Visit the website at 

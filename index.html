@@ -150,6 +150,7 @@
                 <li data-focus="centering">Center the cloud so it sits at the origin</li>
                 <li data-focus="covariance">See how the centered variables vary together</li>
                 <li data-focus="components">Find the principal directions of spread</li>
+                <li data-focus="projection">See what it means to keep only the retained PCA directions</li>
                 <li data-focus="variance">Select the top eigenvectors to keep</li>
                 <li data-focus="reconstruction">Reconstruct the data and inspect the information loss</li>
               </ol>
@@ -247,10 +248,37 @@
           </div>
         </section>
 
+        <section class="lesson-card card" id="sectionProjection">
+          <div class="section-header">
+            <div>
+              <p class="section-index">7. Projection Onto Eigenvectors</p>
+              <h2>What Does Projection Mean in PCA?</h2>
+            </div>
+            <p class="section-lead">
+              Projection means keeping only the part of a centered point that lies along a chosen principal direction.
+              Click a point in the original cloud below, then use the selector in the second panel to compare how that
+              same point drops onto different principal directions.
+            </p>
+          </div>
+          <div class="topx-explanation" id="projectionSummary"></div>
+          <div class="chart-grid projection-grid">
+            <div class="chart-card">
+              <p class="chart-label">Original data and selected principal direction</p>
+              <div id="projectionSourcePlot" class="plot-area projection-plot" aria-label="Original data plot for projection teaching"></div>
+            </div>
+            <div class="chart-card">
+              <p class="chart-label">Selected point projected onto the chosen principal direction</p>
+              <div id="projectionComponentSelector" class="projection-component-selector" aria-label="Choose principal component for the projection view"></div>
+              <div id="projectionDetailPlot" class="plot-area projection-plot" aria-label="2D projection teaching plot"></div>
+            </div>
+          </div>
+          <div class="insight-panel projection-insight" id="projectionInsight"></div>
+        </section>
+
         <section class="lesson-card card" id="sectionVariance">
           <div class="section-header">
             <div>
-              <p class="section-index">7. Explained Variance and Top x Selection</p>
+              <p class="section-index">8. Explained Variance and Top x Selection</p>
               <h2>Why Do We Keep the Top x Components?</h2>
             </div>
             <p class="section-lead">
@@ -281,7 +309,7 @@
         <section class="lesson-card card" id="sectionReconstruction">
           <div class="section-header">
             <div>
-              <p class="section-index">8. Reconstruction and Information Loss</p>
+              <p class="section-index">9. Reconstruction and Information Loss</p>
               <h2>
                 What Information Is Lost When Fewer Components Are Kept?
                 <span class="help-badge" data-tooltip="After each point is projected onto the kept components, reconstruction maps those new coordinates back to the original axes. Any difference from the original data is information that was not preserved.">?</span>
@@ -312,7 +340,7 @@
         <section class="lesson-card card" id="sectionTakeaways">
           <div class="section-header">
             <div>
-              <p class="section-index">9. Key Takeaways and Common Misconceptions</p>
+              <p class="section-index">10. Key Takeaways and Common Misconceptions</p>
               <h2>What Should You Remember About PCA?</h2>
             </div>
             <p class="section-lead">

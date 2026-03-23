@@ -32,6 +32,7 @@ const DEFAULTS = {
 const AXIS_LABELS = ["x", "y", "z", "w", "v"];
 const COMPONENT_COLORS = ["#2b465c", "#667f92", "#9aa7b2", "#bcc4ca"];
 const SELECTED_COMPONENT_COLOR = "#1f5fae";
+const PROJECTION_POINT_COLOR = "#c97f23";
 
 const state = {
   ...DEFAULTS,
@@ -39,7 +40,10 @@ const state = {
   source: "synthetic dataset",
   points: [],
   selectedComponent: 0,
+  selectedProjectionComponent: 0,
+  selectedProjectionPointId: null,
   componentCamera: null,
+  projectionCamera: null,
   focus: "original",
   walkthroughTimer: null,
   walkthroughStep: -1
@@ -84,6 +88,11 @@ function cacheElements() {
     covarianceInsight: document.getElementById("covarianceInsight"),
     componentInsight: document.getElementById("componentInsight"),
     componentCards: document.getElementById("componentCards"),
+    projectionSummary: document.getElementById("projectionSummary"),
+    projectionInsight: document.getElementById("projectionInsight"),
+    projectionComponentSelector: document.getElementById("projectionComponentSelector"),
+    projectionSourcePlot: document.getElementById("projectionSourcePlot"),
+    projectionDetailPlot: document.getElementById("projectionDetailPlot"),
     topXExplanation: document.getElementById("topXExplanation"),
     reconstructionMetrics: document.getElementById("reconstructionMetrics"),
     reconstructionExplanation: document.getElementById("reconstructionExplanation"),
@@ -152,6 +161,7 @@ function attachEventListeners() {
   elements.downloadBtn.addEventListener("click", downloadDatasetCsv);
   elements.resetBtn.addEventListener("click", resetState);
   elements.componentCards.addEventListener("click", handleComponentCardClick);
+  elements.projectionComponentSelector.addEventListener("click", handleProjectionComponentClick);
 }
 
 function regenerateSyntheticDataset() {
@@ -168,7 +178,10 @@ function regenerateSyntheticDataset() {
   state.source = "synthetic dataset";
   state.keepCount = clampKeepCount(state.keepCount, state.labels.length);
   state.selectedComponent = clampComponentIndex(state.selectedComponent, state.labels.length);
+  state.selectedProjectionComponent = clampComponentIndex(state.selectedProjectionComponent, state.labels.length);
   state.componentCamera = null;
+  state.selectedProjectionPointId = null;
+  state.projectionCamera = null;
   renderApp();
 }
 
@@ -189,7 +202,10 @@ function handleCsvUpload(event) {
       state.pointCount = parsed.points.length;
       state.keepCount = clampKeepCount(state.keepCount, state.labels.length);
       state.selectedComponent = 0;
+      state.selectedProjectionComponent = 0;
       state.componentCamera = null;
+      state.selectedProjectionPointId = null;
+      state.projectionCamera = null;
       state.source = `uploaded CSV: ${file.name}`;
       state.focus = "original";
       renderApp();
@@ -243,6 +259,7 @@ function buildWalkthroughSequence(dimension) {
     { focus: "centering" },
     { focus: "covariance" },
     { focus: "components" },
+    { focus: "projection" },
     { focus: "variance", keepCount: 1 },
     { focus: "reconstruction", keepCount: Math.min(Math.max(1, dimension - 1), dimension) }
   ];
@@ -268,7 +285,10 @@ function resetState() {
   state.noise = DEFAULTS.noise;
   state.keepCount = DEFAULTS.keepCount;
   state.selectedComponent = 0;
+  state.selectedProjectionComponent = 0;
   state.componentCamera = null;
+  state.selectedProjectionPointId = null;
+  state.projectionCamera = null;
   state.focus = "original";
   elements.csvUpload.value = "";
   regenerateSyntheticDataset();
@@ -286,8 +306,26 @@ function handleComponentCardClick(event) {
   renderApp();
 }
 
+function handleProjectionComponentClick(event) {
+  const button = event.target.closest("[data-projection-component]");
+  if (!button) {
+    return;
+  }
+
+  const componentIndex = clampComponentIndex(Number(button.dataset.projectionComponent), state.labels.length);
+  if (componentIndex === state.selectedProjectionComponent) {
+    return;
+  }
+
+  stopWalkthrough();
+  state.focus = "projection";
+  state.selectedProjectionComponent = componentIndex;
+  renderApp();
+}
+
 function renderApp() {
   state.selectedComponent = clampComponentIndex(state.selectedComponent, state.labels.length);
+  state.selectedProjectionComponent = clampComponentIndex(state.selectedProjectionComponent, state.labels.length);
   syncControls();
   syncRoadmap();
 
@@ -299,6 +337,7 @@ function renderApp() {
   renderCenteringSection(analysis);
   renderCovarianceSection(analysis);
   renderComponentSection(analysis);
+  renderProjectionSection(analysis, retention);
   renderVarianceSection(analysis, retention);
   renderReconstructionSection(analysis, retention);
   renderProjectNotes();
@@ -335,6 +374,38 @@ function bindComponentPlotClick() {
   });
 }
 
+function bindProjectionSourcePlotClick() {
+  const plot = elements.projectionSourcePlot;
+  if (!plot || typeof plot.on !== "function") {
+    return;
+  }
+
+  if (typeof plot.removeAllListeners === "function") {
+    plot.removeAllListeners("plotly_click");
+    plot.removeAllListeners("plotly_relayout");
+  }
+
+  plot.on("plotly_click", (event) => {
+    const clickedPoint = event?.points?.[0];
+    const clickedTrace = clickedPoint?.data;
+    const pointId = Number(clickedPoint?.customdata);
+    if (!clickedTrace?.meta?.projectionSource || !Number.isInteger(pointId) || pointId === state.selectedProjectionPointId) {
+      return;
+    }
+
+    stopWalkthrough();
+    state.focus = "projection";
+    state.selectedProjectionPointId = pointId;
+    renderApp();
+  });
+
+  plot.on("plotly_relayout", (event) => {
+    if (event?.["scene.camera"]) {
+      state.projectionCamera = event["scene.camera"];
+    }
+  });
+}
+
 function syncControls() {
   elements.dimensionMode.value = String(state.dimensionMode);
   elements.pointCount.min = String(Math.min(30, state.pointCount));
@@ -362,6 +433,19 @@ function syncRoadmap() {
   Array.from(elements.roadmapList.querySelectorAll("li")).forEach((item) => {
     item.classList.toggle("active", item.dataset.focus === state.focus);
   });
+}
+
+function syncSelectedProjectionPoint(analysis) {
+  if (analysis.points.some((point) => point.id === state.selectedProjectionPointId)) {
+    return state.selectedProjectionPointId;
+  }
+
+  const defaultIndex = analysis.scores.reduce((bestIndex, scoreRow, index) => (
+    Math.abs(scoreRow[0]) > Math.abs(analysis.scores[bestIndex][0]) ? index : bestIndex
+  ), 0);
+
+  state.selectedProjectionPointId = analysis.points[defaultIndex]?.id ?? null;
+  return state.selectedProjectionPointId;
 }
 
 function renderDatasetSummary(analysis, retention) {
@@ -439,9 +523,8 @@ function renderComponentSection(analysis) {
       ${laterDirectionText} A larger eigenvalue means that direction explains more of the cloud's spread.
     </p>
     <p>
-      Click any eigenvector line or component card to inspect the spread it spans. The projected points will move onto
-      that principal direction, and the highlighted segment will show the observed span from minimum to maximum
-      projection.
+      Click any eigenvector line or component card to highlight that principal direction and compare its importance.
+      This section is only showing the centered data cloud together with the eigenvectors themselves.
     </p>
   `;
 
@@ -462,7 +545,7 @@ function renderComponentSection(analysis) {
         <p><strong>Eigenvalue:</strong> ${formatNumber(analysis.eigenvalues[index])}</p>
         <p><strong>Explains this much variation:</strong> ${formatPercent(analysis.explainedVariance[index])}</p>
         <p>${importanceNote}</p>
-        <p>${selected ? "The plot is currently showing the spread spanned by this component." : "Click to project the data cloud onto this direction and inspect its spread."}</p>
+        <p>${selected ? "The plot is currently highlighting this eigenvector in the centered data cloud." : "Click to highlight this eigenvector and compare it with the others."}</p>
       </article>
     `;
   }).join("");
@@ -474,24 +557,348 @@ function renderComponentSection(analysis) {
   }
 }
 
+function renderProjectionSection(analysis, retention) {
+  const model = buildProjectionSectionModel(analysis);
+  renderProjectionComponentSelector(analysis, model);
+
+  elements.projectionSummary.innerHTML = `
+    <p>
+      Choose a point in the left plot. The right plot redraws that one point in a simple centered 2D frame where the
+      horizontal axis is the currently selected principal direction, <strong>${model.componentLabel}</strong>.
+    </p>
+    <p>
+      ${model.componentIndex === 0
+        ? `${model.componentLabel} has the largest eigenvalue <strong>${formatNumber(model.eigenvalue)}</strong> and explains <strong>${formatPercent(model.explainedVariance)}</strong> of the total variation, so PCA keeps it first.`
+        : `${model.componentLabel} has eigenvalue <strong>${formatNumber(model.eigenvalue)}</strong> and explains <strong>${formatPercent(model.explainedVariance)}</strong> of the total variation. Its eigenvalue is smaller than PC1's, so PCA ranks it later.`}
+      The current keep control retains <strong>${formatPercent(retention.retainedVarianceRatio)}</strong> overall, but
+      this section isolates what happens along ${model.componentLabel} for the selected point.
+    </p>
+  `;
+
+  elements.projectionInsight.innerHTML = buildProjectionInsightHtml(analysis, model);
+
+  if (analysis.dimension === 2) {
+    render2DProjectionSourcePlot(analysis, model);
+  } else {
+    render3DProjectionSourcePlot(analysis, model);
+  }
+
+  renderProjectionDetailPlot(analysis, model);
+}
+
+function buildProjectionSectionModel(analysis) {
+  const selectedPointId = syncSelectedProjectionPoint(analysis);
+  const selectedIndex = Math.max(0, analysis.points.findIndex((point) => point.id === selectedPointId));
+  const componentIndex = clampComponentIndex(state.selectedProjectionComponent, analysis.dimension);
+  const componentLabel = `PC${componentIndex + 1}`;
+  const selectedPoint = analysis.points[selectedIndex];
+  const selectedCenteredPoint = analysis.centeredPoints[selectedIndex];
+  const selectedVector = analysis.eigenvectors[componentIndex];
+  const selectedScore = analysis.scores[selectedIndex][componentIndex];
+  const projectedCenteredValues = scaleVector(selectedVector, selectedScore);
+  const projectedRawValues = addVectors(projectedCenteredValues, analysis.mean);
+  const residualVector = subtractVectors(selectedCenteredPoint.values, projectedCenteredValues);
+  const residualMagnitude = magnitude(residualVector);
+  const offAxisComponentIndex = analysis.dimension === 2 ? (componentIndex === 0 ? 1 : 0) : null;
+  const offAxisCoordinate = analysis.dimension === 2 ? analysis.scores[selectedIndex][offAxisComponentIndex] : residualMagnitude;
+  const axisExtent = Math.max(...analysis.scores.map((scoreRow) => Math.abs(scoreRow[componentIndex])), Math.abs(selectedScore), 1);
+  const offAxisExtent = analysis.dimension === 2
+    ? Math.max(...analysis.scores.map((scoreRow) => Math.abs(scoreRow[offAxisComponentIndex])), Math.abs(offAxisCoordinate), 1)
+    : Math.max(residualMagnitude * 1.35, axisExtent * 0.2, 1);
+  const detailVectors = [
+    [-axisExtent, analysis.dimension === 2 ? -offAxisExtent : 0],
+    [axisExtent, offAxisExtent],
+    [selectedScore, offAxisCoordinate],
+    [selectedScore, 0],
+    [0, 0]
+  ];
+
+  return {
+    componentIndex,
+    componentLabel,
+    componentColor: COMPONENT_COLORS[Math.min(componentIndex, COMPONENT_COLORS.length - 1)],
+    eigenvalue: analysis.eigenvalues[componentIndex],
+    explainedVariance: analysis.explainedVariance[componentIndex],
+    selectedPoint,
+    projectedRawPoint: {
+      id: selectedPoint.id,
+      values: projectedRawValues
+    },
+    selectedVector,
+    selectedScore,
+    projectionLength: Math.abs(selectedScore),
+    residualMagnitude,
+    offAxisCoordinate,
+    axisLabel: `Coordinate along ${componentLabel}`,
+    offAxisAxisLabel: analysis.dimension === 2
+      ? `Coordinate along PC${offAxisComponentIndex + 1}`
+      : `Distance away from ${componentLabel}`,
+    projectionLengthLabelY: Math.max(offAxisExtent * 0.16, 0.24),
+    detailBounds: computeBounds(detailVectors)
+  };
+}
+
+function buildProjectionInsightHtml(analysis, model) {
+  const keepContext = state.keepCount === 1
+    ? `If you keep only the top 1 component, PCA stores this point using just its ${model.componentLabel} coordinate when that is the retained direction.`
+    : `If you keep the top ${state.keepCount}, PCA stores this point using several principal coordinates. ${model.componentLabel} is one of those coordinates only when it falls within the retained set.`;
+  const rankContext = model.componentIndex === 0
+    ? `${model.componentLabel} is the most important direction because it has the largest eigenvalue.`
+    : `${model.componentLabel} is ranked below PC1 because its eigenvalue is smaller, so projecting onto it preserves less variation overall.`;
+
+  return `
+    <p>
+      ${analysis.dimension === 3
+        ? "Rotate the left plot if needed, then click any point in the cloud."
+        : "Click any point in the left plot."}
+      The selector above the second plot lets you switch between the different principal directions.
+    </p>
+    <p><strong>Selected point:</strong> #${model.selectedPoint.id} at ${formatVector(model.selectedPoint.values)}</p>
+    <p>
+      <strong>How to read the right plot:</strong> the dark point is the selected point after mean centering. The amber
+      diamond is its projection onto <strong>${model.componentLabel}</strong>. The dashed drop is the part perpendicular
+      to ${model.componentLabel} that is discarded in this one-direction view.
+    </p>
+    <p><strong>Signed ${model.componentLabel} coordinate:</strong> ${formatNumber(model.selectedScore)}. <strong>Projection length:</strong> ${formatNumber(model.projectionLength)}. <strong>Perpendicular leftover:</strong> ${formatNumber(model.residualMagnitude)}.</p>
+    <p><strong>Projected point back in the original axes:</strong> ${formatVector(model.projectedRawPoint.values)}</p>
+    <p>${rankContext}</p>
+    <p>${keepContext}</p>
+  `;
+}
+
+function renderProjectionComponentSelector(analysis, model) {
+  elements.projectionComponentSelector.innerHTML = analysis.eigenvalues.map((eigenvalue, index) => `
+    <button
+      type="button"
+      class="projection-component-button ${index === model.componentIndex ? "active" : ""}"
+      data-projection-component="${index}"
+      aria-pressed="${index === model.componentIndex ? "true" : "false"}"
+    >
+      <strong>PC${index + 1}</strong>
+      <span>eigenvalue ${formatNumber(eigenvalue)}</span>
+    </button>
+  `).join("");
+}
+
+function render2DProjectionSourcePlot(analysis, model) {
+  const bounds = computeBounds(analysis.points.map((point) => point.values).concat([analysis.mean]));
+  const axisLength = bounds.maxRadius * 0.95;
+  const data = [
+    scatter2DTrace(analysis.points, {
+      name: "Original data",
+      color: "#56616a",
+      hoverLabel: "Original point",
+      hovertemplate: "Point #%{customdata}<br>x: %{x:.3f}<br>y: %{y:.3f}<extra></extra>",
+      markerSize: 8.5,
+      markerOpacity: 0.9,
+      markerLineColor: "rgba(255,255,255,0.86)",
+      markerLineWidth: 1,
+      customdata: analysis.points.map((point) => point.id),
+      meta: { projectionSource: true }
+    }),
+    ...analysis.eigenvectors.map((vector, index) => componentLine2DTrace(vector, axisLength, {
+      center: analysis.mean,
+      label: `PC${index + 1}`,
+      color: index === model.componentIndex
+        ? model.componentColor
+        : "rgba(154, 167, 178, 0.42)",
+      width: index === model.componentIndex ? 6 : 2.6,
+      eigenvalue: analysis.eigenvalues[index],
+      explainedVariance: analysis.explainedVariance[index],
+      componentIndex: index
+    })),
+    singlePoint2DTrace(analysis.mean, {
+      name: "Mean",
+      color: "#203648",
+      symbol: "diamond",
+      hoverLabel: "Mean"
+    }),
+    singlePoint2DTrace(model.selectedPoint.values, {
+      name: "Selected point",
+      color: SELECTED_COMPONENT_COLOR,
+      hoverLabel: `Selected point #${model.selectedPoint.id}`,
+      markerSize: 13,
+      markerLineColor: "#ffffff",
+      markerLineWidth: 1.8
+    })
+  ];
+
+  const plot = Plotly.react("projectionSourcePlot", data, build2DLayout(bounds, analysis.labels, {
+    titleX: analysis.labels[0],
+    titleY: analysis.labels[1]
+  }), plotConfig());
+  Promise.resolve(plot).then(bindProjectionSourcePlotClick);
+}
+
+function render3DProjectionSourcePlot(analysis, model) {
+  const bounds = computeBounds(analysis.points.map((point) => point.values).concat([analysis.mean]));
+  const axisLength = bounds.maxRadius * 0.95;
+
+  const data = [
+    scatter3DTrace(analysis.points, {
+      name: "Original data",
+      hovertemplate: "Point #%{customdata}<br>x: %{x:.3f}<br>y: %{y:.3f}<br>z: %{z:.3f}<extra></extra>",
+      hoverLabel: "Original point",
+      color: "#56616a",
+      markerSize: 5.8,
+      markerOpacity: 0.88,
+      markerLineColor: "rgba(255,255,255,0.66)",
+      markerLineWidth: 0.8,
+      customdata: analysis.points.map((point) => point.id),
+      meta: { projectionSource: true }
+    }),
+    ...analysis.eigenvectors.flatMap((vector, index) => componentLine3DTraces(vector, axisLength, {
+      center: analysis.mean,
+      label: `PC${index + 1}`,
+      color: index === model.componentIndex
+        ? model.componentColor
+        : "rgba(154, 167, 178, 0.34)",
+      width: index === model.componentIndex ? 9 : 3,
+      eigenvalue: analysis.eigenvalues[index],
+      explainedVariance: analysis.explainedVariance[index],
+      componentIndex: index
+    })),
+    singlePoint3DTrace(analysis.mean, {
+      name: "Mean",
+      color: "#203648",
+      hoverLabel: "Mean"
+    }),
+    singlePoint3DTrace(model.selectedPoint.values, {
+      name: "Selected point",
+      color: SELECTED_COMPONENT_COLOR,
+      hoverLabel: `Selected point #${model.selectedPoint.id}`,
+      markerSize: 7.6,
+      markerLineColor: "#ffffff",
+      markerLineWidth: 1.1
+    })
+  ];
+
+  const plot = Plotly.react("projectionSourcePlot", data, build3DLayout(bounds, analysis.labels, {
+    uirevision: "projection-source-3d",
+    sceneOptions: {
+      camera: state.projectionCamera,
+      uirevision: "projection-source-3d"
+    }
+  }), plotConfig(true));
+  Promise.resolve(plot).then(bindProjectionSourcePlotClick);
+}
+
+function renderProjectionDetailPlot(analysis, model) {
+  const data = [
+    {
+      type: "scatter",
+      mode: "lines+text",
+      x: model.detailBounds.ranges[0],
+      y: [0, 0],
+      text: ["", model.componentLabel],
+      textposition: "top right",
+      line: { color: model.componentColor, width: 4 },
+      hovertemplate: `${model.componentLabel}<br>Eigenvalue: ${formatNumber(model.eigenvalue)}<br>Explained variance: ${formatPercent(model.explainedVariance)}<extra></extra>`,
+      name: model.componentLabel
+    },
+    {
+      type: "scatter",
+      mode: "lines",
+      x: [0, model.selectedScore],
+      y: [0, 0],
+      line: { color: PROJECTION_POINT_COLOR, width: 4 },
+      hovertemplate: `Projection length: ${formatNumber(model.projectionLength)}<br>Signed ${model.componentLabel} coordinate: ${formatNumber(model.selectedScore)}<extra></extra>`,
+      name: `Projection onto ${model.componentLabel}`
+    },
+    errorSegments2DTrace(
+      [{ values: [model.selectedScore, model.offAxisCoordinate] }],
+      [{ values: [model.selectedScore, 0] }],
+      colorWithAlpha(SELECTED_COMPONENT_COLOR, 0.42)
+    ),
+    {
+      type: "scatter",
+      mode: "text",
+      x: [model.selectedScore / 2],
+      y: [model.projectionLengthLabelY],
+      text: [`Projection length = ${formatNumber(model.projectionLength)}`],
+      textfont: { size: 12, color: PROJECTION_POINT_COLOR },
+      hoverinfo: "skip",
+      name: "Projection length label"
+    },
+    singlePoint2DTrace([0, 0], {
+      name: "Centered mean",
+      color: "#203648",
+      symbol: "diamond",
+      hoverLabel: "Centered mean",
+      markerSize: 10
+    }),
+    singlePoint2DTrace([model.selectedScore, model.offAxisCoordinate], {
+      name: "Selected point",
+      color: SELECTED_COMPONENT_COLOR,
+      hoverLabel: "Selected point in centered frame",
+      markerSize: 12,
+      markerLineColor: "#ffffff",
+      markerLineWidth: 1.4
+    }),
+    singlePoint2DTrace([model.selectedScore, 0], {
+      name: `Projection onto ${model.componentLabel}`,
+      color: PROJECTION_POINT_COLOR,
+      symbol: "diamond",
+      hoverLabel: `Projection onto ${model.componentLabel}`,
+      markerSize: 12,
+      markerLineColor: "#ffffff",
+      markerLineWidth: 1.4
+    })
+  ];
+
+  const layout = build2DLayout(model.detailBounds, [model.axisLabel, model.offAxisAxisLabel], {
+    titleX: model.axisLabel,
+    titleY: model.offAxisAxisLabel,
+    lockAspect: false
+  });
+  layout.annotations = [
+    {
+      text: "Selected point",
+      x: model.selectedScore,
+      y: model.offAxisCoordinate,
+      xref: "x",
+      yref: "y",
+      showarrow: false,
+      yshift: model.offAxisCoordinate >= 0 ? 16 : -16,
+      font: { size: 12, color: SELECTED_COMPONENT_COLOR }
+    },
+    {
+      text: "Projection",
+      x: model.selectedScore,
+      y: 0,
+      xref: "x",
+      yref: "y",
+      showarrow: false,
+      yshift: 16,
+      font: { size: 12, color: PROJECTION_POINT_COLOR }
+    }
+  ];
+
+  Plotly.react("projectionDetailPlot", data, layout, plotConfig());
+}
+
 function renderVarianceSection(analysis, retention) {
   const keptLabels = analysis.eigenvalues
     .map((_, index) => `PC${index + 1}`)
     .slice(0, state.keepCount)
     .join(", ");
 
+  elements.keepSummary.textContent = `Keeping the top ${state.keepCount} means keeping ${keptLabels}, the direction${state.keepCount === 1 ? "" : "s"} where the projection spread is largest.`;
+
   elements.topXExplanation.innerHTML = `
     <p>
       PCA keeps the top components by selecting the eigenvectors with the largest eigenvalues. These are the directions
-      that preserve the biggest patterns in the cloud of points. After that, each point is projected onto those
-      directions, and the projection values become the point's new coordinates in a reduced-size representation.
+      where the projected points spread out the most. After that, each point is projected onto those directions, and
+      the projection values become the point's new coordinates in a reduced-size representation.
     </p>
     <p>
       Right now that means keeping <strong>${keptLabels}</strong>. Together they keep
       <strong>${formatPercent(retention.retainedVarianceRatio)}</strong> of the total variation. So each point is
       described by <strong>${state.keepCount}</strong> new coordinate${state.keepCount === 1 ? "" : "s"} instead of
       <strong>${analysis.dimension}</strong>, while the discarded components account for the remaining
-      <strong>${formatPercent(1 - retention.retainedVarianceRatio)}</strong>.
+      <strong>${formatPercent(1 - retention.retainedVarianceRatio)}</strong>. In the projection section above, clicking
+      one point shows its coordinate along the currently selected principal direction together with the perpendicular
+      part that would be removed in that one-direction view.
     </p>
   `;
 
@@ -533,50 +940,10 @@ function renderProjectNotes() {
     <p>
       This learning lab is designed to help undergraduate students build intuition for PCA by linking the mathematics
       to the shape of a cloud of points. It shows how PCA centers the cloud at the origin, finds directions of maximum
-      variance, projects points onto the most important directions, and compresses the data into fewer coordinates with
-      some possible information loss.
+      variance, projects the data onto the retained principal directions, and compresses the data into fewer
+      coordinates with some possible information loss.
     </p>
   `;
-}
-
-function buildSelectedComponentSummary(analysis, componentIndex) {
-  const projection = buildSelectedComponentProjection(analysis, componentIndex);
-  const componentLabel = `PC${componentIndex + 1}`;
-  let roleText = `${componentLabel} is a remaining direction of spread in the cloud.`;
-  if (componentIndex === 0) {
-    roleText = `${componentLabel} is the direction of maximum variance, so it follows the strongest trend in the cloud of points.`;
-  } else if (componentIndex === analysis.dimension - 1) {
-    roleText = `${componentLabel} is the direction of minimum variance, so it captures the weakest remaining spread after the earlier components are fixed.`;
-  }
-
-  return {
-    label: componentLabel,
-    explainedVariance: analysis.explainedVariance[componentIndex],
-    spanLength: projection.spanLength,
-    roleText,
-    retentionText: componentIndex < state.keepCount
-      ? "It is currently one of the retained components."
-      : "It is currently discarded when you reduce the dimensionality."
-  };
-}
-
-function buildSelectedComponentProjection(analysis, componentIndex) {
-  const safeIndex = clampComponentIndex(componentIndex, analysis.dimension);
-  const vector = analysis.eigenvectors[safeIndex];
-  const scores = analysis.scores.map((scoreRow) => scoreRow[safeIndex]);
-  const minScore = Math.min(...scores);
-  const maxScore = Math.max(...scores);
-  const projectedPoints = analysis.centeredPoints.map((point, index) => ({
-    id: point.id,
-    values: scaleVector(vector, scores[index])
-  }));
-
-  return {
-    projectedPoints,
-    spanStart: scaleVector(vector, minScore),
-    spanEnd: scaleVector(vector, maxScore),
-    spanLength: maxScore - minScore
-  };
 }
 
 function render2DOriginalPlot(analysis) {
@@ -799,8 +1166,6 @@ function render2DComponentPlot(analysis) {
   const bounds = computeBounds(centeredVectors.concat([Array(analysis.dimension).fill(0)]));
   const axisLength = bounds.maxRadius * 0.9;
   const selectedComponent = clampComponentIndex(state.selectedComponent, analysis.dimension);
-  const projectionOverlay = buildSelectedComponentProjection(analysis, selectedComponent);
-  const overlayColor = SELECTED_COMPONENT_COLOR;
 
   const data = [
     scatter2DTrace(analysis.centeredPoints, {
@@ -808,12 +1173,12 @@ function render2DComponentPlot(analysis) {
       color: "rgba(70, 78, 86, 0.72)",
       hoverLabel: "Centered point"
     }),
-    errorSegments2DTrace(analysis.centeredPoints, projectionOverlay.projectedPoints, colorWithAlpha(overlayColor, 0.24)),
-    spreadSpan2DTrace(projectionOverlay.spanStart, projectionOverlay.spanEnd, overlayColor, `Observed spread on PC${selectedComponent + 1}`),
-    scatter2DTrace(projectionOverlay.projectedPoints, {
-      name: `Projection onto PC${selectedComponent + 1}`,
-      color: colorWithAlpha(overlayColor, 0.9),
-      hoverLabel: `Projection on PC${selectedComponent + 1}`
+    singlePoint2DTrace([0, 0], {
+      name: "Origin",
+      color: "#203648",
+      symbol: "diamond",
+      hoverLabel: "Origin",
+      markerSize: 10
     }),
     ...analysis.eigenvectors.map((vector, index) => componentLine2DTrace(vector, axisLength, {
       label: `PC${index + 1}`,
@@ -839,8 +1204,6 @@ function render3DComponentPlot(analysis) {
   const bounds = computeBounds(centeredVectors.concat([Array(analysis.dimension).fill(0)]));
   const axisLength = bounds.maxRadius * 0.9;
   const selectedComponent = clampComponentIndex(state.selectedComponent, analysis.dimension);
-  const projectionOverlay = buildSelectedComponentProjection(analysis, selectedComponent);
-  const overlayColor = SELECTED_COMPONENT_COLOR;
 
   const data = [
     scatter3DTrace(analysis.centeredPoints, {
@@ -848,12 +1211,11 @@ function render3DComponentPlot(analysis) {
       hoverLabel: "Centered point",
       color: "rgba(70, 78, 86, 0.74)"
     }),
-    errorSegments3DTrace(analysis.centeredPoints, projectionOverlay.projectedPoints, colorWithAlpha(overlayColor, 0.24)),
-    spreadSpan3DTrace(projectionOverlay.spanStart, projectionOverlay.spanEnd, overlayColor, `Observed spread on PC${selectedComponent + 1}`),
-    scatter3DTrace(projectionOverlay.projectedPoints, {
-      name: `Projection onto PC${selectedComponent + 1}`,
-      hoverLabel: `Projection on PC${selectedComponent + 1}`,
-      color: colorWithAlpha(overlayColor, 0.92)
+    singlePoint3DTrace([0, 0, 0], {
+      name: "Origin",
+      color: "#203648",
+      hoverLabel: "Origin",
+      markerSize: 5.5
     }),
     ...analysis.eigenvectors.flatMap((vector, index) => componentLine3DTraces(vector, axisLength, {
       label: `PC${index + 1}`,
@@ -1353,14 +1715,21 @@ function scatter2DTrace(points, options = {}) {
     x: coords.map((vector) => vector[0]),
     y: coords.map((vector) => vector[1]),
     marker: {
-      size: 8,
+      size: options.markerSize || 8,
       color: options.color,
-      line: { color: "rgba(255,255,255,0.78)", width: 0.8 }
+      symbol: options.symbol || "circle",
+      opacity: options.markerOpacity,
+      line: {
+        color: options.markerLineColor || "rgba(255,255,255,0.78)",
+        width: options.markerLineWidth ?? 0.8
+      }
     },
-    hovertemplate: `${options.hoverLabel || "Point"}<br>x: %{x:.3f}<br>y: %{y:.3f}<extra></extra>`,
+    hovertemplate: options.hovertemplate || `${options.hoverLabel || "Point"}<br>x: %{x:.3f}<br>y: %{y:.3f}<extra></extra>`,
+    customdata: options.customdata,
     xaxis: options.xaxis,
     yaxis: options.yaxis,
-    name: options.name
+    name: options.name,
+    meta: options.meta
   };
 }
 
@@ -1371,14 +1740,20 @@ function singlePoint2DTrace(vector, options = {}) {
     x: [vector[0]],
     y: [vector[1]],
     marker: {
-      size: 12,
+      size: options.markerSize || 12,
       color: options.color,
-      symbol: options.symbol || "circle"
+      symbol: options.symbol || "circle",
+      line: {
+        color: options.markerLineColor || "rgba(255,255,255,0.82)",
+        width: options.markerLineWidth ?? 0.8
+      }
     },
-    hovertemplate: `${options.hoverLabel || "Point"}<br>x: %{x:.3f}<br>y: %{y:.3f}<extra></extra>`,
+    hovertemplate: options.hovertemplate || `${options.hoverLabel || "Point"}<br>x: %{x:.3f}<br>y: %{y:.3f}<extra></extra>`,
+    customdata: options.customdata,
     xaxis: options.xaxis,
     yaxis: options.yaxis,
-    name: options.name
+    name: options.name,
+    meta: options.meta
   };
 }
 
@@ -1397,11 +1772,12 @@ function axisDirection2DTrace(center, direction, magnitude, options = {}) {
 }
 
 function componentLine2DTrace(vector, magnitude, options = {}) {
+  const center = options.center || [0, 0];
   return {
     type: "scatter",
     mode: "lines+markers+text",
-    x: [-vector[0] * magnitude, vector[0] * magnitude],
-    y: [-vector[1] * magnitude, vector[1] * magnitude],
+    x: [center[0] - vector[0] * magnitude, center[0] + vector[0] * magnitude],
+    y: [center[1] - vector[1] * magnitude, center[1] + vector[1] * magnitude],
     text: ["", options.label || ""],
     textposition: "top right",
     marker: { size: 6, color: options.color },
@@ -1409,19 +1785,6 @@ function componentLine2DTrace(vector, magnitude, options = {}) {
     hovertemplate: `${options.label}<br>Principal direction: ${formatVector(vector)}<br>Eigenvalue: ${formatNumber(options.eigenvalue)}<br>Explained variance: ${formatPercent(options.explainedVariance)}<extra></extra>`,
     name: options.label,
     meta: { componentIndex: options.componentIndex }
-  };
-}
-
-function spreadSpan2DTrace(start, end, color, label) {
-  return {
-    type: "scatter",
-    mode: "lines+markers",
-    x: [start[0], end[0]],
-    y: [start[1], end[1]],
-    marker: { size: 8, color },
-    line: { color: colorWithAlpha(color, 0.42), width: 10 },
-    hovertemplate: `${label}<br>Start: (${formatNumber(start[0])}, ${formatNumber(start[1])})<br>End: (${formatNumber(end[0])}, ${formatNumber(end[1])})<extra></extra>`,
-    name: label
   };
 }
 
@@ -1454,13 +1817,20 @@ function scatter3DTrace(points, options = {}) {
     y: coords.map((vector) => vector[1]),
     z: coords.map((vector) => vector[2]),
     marker: {
-      size: 4.5,
+      size: options.markerSize || 4.5,
       color: options.color,
-      line: { color: "rgba(255,255,255,0.4)", width: 0.5 }
+      symbol: options.symbol,
+      opacity: options.markerOpacity,
+      line: {
+        color: options.markerLineColor || "rgba(255,255,255,0.4)",
+        width: options.markerLineWidth ?? 0.5
+      }
     },
-    hovertemplate: `${options.hoverLabel || "Point"}<br>x: %{x:.3f}<br>y: %{y:.3f}<br>z: %{z:.3f}<extra></extra>`,
+    hovertemplate: options.hovertemplate || `${options.hoverLabel || "Point"}<br>x: %{x:.3f}<br>y: %{y:.3f}<br>z: %{z:.3f}<extra></extra>`,
+    customdata: options.customdata,
     scene: options.scene,
-    name: options.name
+    name: options.name,
+    meta: options.meta
   };
 }
 
@@ -1471,10 +1841,19 @@ function singlePoint3DTrace(vector, options = {}) {
     x: [vector[0]],
     y: [vector[1]],
     z: [vector[2]],
-    marker: { size: 6, color: options.color },
-    hovertemplate: `${options.hoverLabel || "Point"}<br>x: %{x:.3f}<br>y: %{y:.3f}<br>z: %{z:.3f}<extra></extra>`,
+    marker: {
+      size: options.markerSize || 6,
+      color: options.color,
+      line: {
+        color: options.markerLineColor || "rgba(255,255,255,0.72)",
+        width: options.markerLineWidth ?? 0.6
+      }
+    },
+    hovertemplate: options.hovertemplate || `${options.hoverLabel || "Point"}<br>x: %{x:.3f}<br>y: %{y:.3f}<br>z: %{z:.3f}<extra></extra>`,
+    customdata: options.customdata,
     scene: options.scene,
-    name: options.name
+    name: options.name,
+    meta: options.meta
   };
 }
 
@@ -1494,12 +1873,13 @@ function axisDirection3DTrace(center, direction, magnitude, options = {}) {
 }
 
 function componentLine3DTraces(vector, magnitude, options = {}) {
+  const center = options.center || [0, 0, 0];
   const lineTrace = {
     type: "scatter3d",
     mode: "lines",
-    x: [-vector[0] * magnitude, vector[0] * magnitude],
-    y: [-vector[1] * magnitude, vector[1] * magnitude],
-    z: [-vector[2] * magnitude, vector[2] * magnitude],
+    x: [center[0] - vector[0] * magnitude, center[0] + vector[0] * magnitude],
+    y: [center[1] - vector[1] * magnitude, center[1] + vector[1] * magnitude],
+    z: [center[2] - vector[2] * magnitude, center[2] + vector[2] * magnitude],
     line: { color: options.color, width: options.width || 5 },
     hovertemplate: `${options.label}<br>Principal direction: ${formatVector(vector)}<br>Eigenvalue: ${formatNumber(options.eigenvalue)}<br>Explained variance: ${formatPercent(options.explainedVariance)}<extra></extra>`,
     name: options.label,
@@ -1509,9 +1889,9 @@ function componentLine3DTraces(vector, magnitude, options = {}) {
   const labelTrace = {
     type: "scatter3d",
     mode: "markers+text",
-    x: [vector[0] * magnitude],
-    y: [vector[1] * magnitude],
-    z: [vector[2] * magnitude],
+    x: [center[0] + vector[0] * magnitude],
+    y: [center[1] + vector[1] * magnitude],
+    z: [center[2] + vector[2] * magnitude],
     text: [options.label],
     textposition: "top center",
     marker: { size: 4.5, color: options.color },
@@ -1521,20 +1901,6 @@ function componentLine3DTraces(vector, magnitude, options = {}) {
   };
 
   return [lineTrace, labelTrace];
-}
-
-function spreadSpan3DTrace(start, end, color, label) {
-  return {
-    type: "scatter3d",
-    mode: "lines+markers",
-    x: [start[0], end[0]],
-    y: [start[1], end[1]],
-    z: [start[2], end[2]],
-    marker: { size: 4.5, color },
-    line: { color: colorWithAlpha(color, 0.42), width: 10 },
-    hovertemplate: `${label}<br>Start: ${formatVector(start)}<br>End: ${formatVector(end)}<extra></extra>`,
-    name: label
-  };
 }
 
 function errorSegments3DTrace(pointsA, pointsB, color) {
@@ -1561,6 +1927,7 @@ function errorSegments3DTrace(pointsA, pointsB, color) {
 }
 
 function build2DLayout(bounds, labels, options = {}) {
+  const lockAspect = options.lockAspect !== false;
   return {
     paper_bgcolor: "rgba(0,0,0,0)",
     plot_bgcolor: "rgba(255,255,255,0.55)",
@@ -1568,7 +1935,7 @@ function build2DLayout(bounds, labels, options = {}) {
     showlegend: false,
     hovermode: "closest",
     xaxis: build2DAxis(options.titleX || labels[0], bounds.ranges[0]),
-    yaxis: build2DAxis(options.titleY || labels[1], bounds.ranges[1], "x")
+    yaxis: build2DAxis(options.titleY || labels[1], bounds.ranges[1], lockAspect ? "x" : undefined)
   };
 }
 
@@ -1809,6 +2176,7 @@ function focusToSectionId(focus) {
     centering: "sectionCentering",
     covariance: "sectionCovariance",
     components: "sectionComponents",
+    projection: "sectionProjection",
     variance: "sectionVariance",
     reconstruction: "sectionReconstruction"
   }[focus] || "sectionOriginal";
